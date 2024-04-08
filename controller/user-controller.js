@@ -3,9 +3,11 @@ const { succesResponse } = require("../lib/helpers/utility-functions");
 const {
   sendAccountActivation,
 } = require("../lib/messages/account-activation-message");
+const { sendPasswordReset } = require("../lib/messages/password-reset-message");
 const {
   validateSignup,
   validateLogin,
+  validatePasswordReset,
 } = require("../lib/validation/user-validation");
 const User = require("../models/user");
 const bcrypt = require("bcryptjs");
@@ -142,7 +144,72 @@ const logout = async (req, res) => {
   return succesResponse(res, "logged out");
 };
 
+//@Method : PUT user/forgot-password
+//@Desc : to get a password reset email
+//@Access: private
+
+const forgotPassword = async (req, res) => {
+  let { email } = req.body;
+  if (!email) {
+    throw new BadRequestError("Invalid email");
+  }
+
+  //find user
+  const user = await User.findOne({ email });
+  if (!user) {
+    throw new BadRequestError("User does not exist");
+  }
+
+  //create password reset token
+  const token = await bcrypt.hash(email.toString(), 10);
+  const thirtyMinutes = 30 * 60 * 1000;
+
+  //assign password reset token to user
+  user.passwordResetToken = token;
+  user.passwordResetExpired = new Date(Date.now() + thirtyMinutes);
+
+  await user.save();
+
+  //send password reset email
+  await sendPasswordReset({ email, token });
+
+  return succesResponse(res, "Check your email for password reset link");
+};
+
+//@Method: GET auth/reset-password
+//@Desc: reset password when logged in
+//@Access: Private
+
+const changePassword = async (req, res, next) => {
+  const userId = req.user._id;
+  const user = await User.findById(userId);
+
+  const error = await validatePasswordReset(req.body);
+  if (error) {
+    throw new BadRequestError(error);
+  }
+  const { oldPassword, newPassword, repeatPassword } = req.body;
+
+  const isValid = await bcrypt.compare(oldPassword, user.password);
+  if (!isValid) {
+    throw new BadRequestError("incorrect password");
+  }
+  if (newPassword !== repeatPassword) {
+    throw new BadRequestError("Passwords do not match");
+  }
+
+  const salt = await bcrypt.genSalt(10);
+  const hashedpassword = await bcrypt.hash(newPassword, salt);
+  user.password = hashedpassword;
+
+  await user.save();
+
+  return succesResponse(res, "Password changed succesfully");
+};
+
 module.exports.signUp = signUp;
 module.exports.activateAccount = activateAccount;
 module.exports.login = login;
 module.exports.logout = logout;
+module.exports.forgotPassword = forgotPassword;
+module.exports.changePassword = changePassword;
